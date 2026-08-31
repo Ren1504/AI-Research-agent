@@ -68,6 +68,8 @@ class AIResearcher:
             embedding_function=self.embeddings,
             collection_name="research_docs")
 
+        self.session_store : Dict[str, InMemoryChatMessageHistory] = {}
+
         print(f"Vector store: {persist_directory} initialized.")
         print(f"Documents indexed: {self.vectorstore._collection.count()}")
 
@@ -146,28 +148,87 @@ class AIResearcher:
 
         return "\n".join(formatted_docs)
 
-    def ask(self, question: str) -> str:
+    def _get_session_history(self, session_id: str) -> BaseChatMessageHistory:
         """
-        Ask a research question and get a structured response.
+        Get the chat history for a given session. If the session does not exist, create a new one.
         """
+        if session_id not in self.session_store:
+            self.session_store[session_id] = InMemoryChatMessageHistory()
+        return self.session_store[session_id]
+
+    def ask(self, question: str, session_id: str) -> str:
+    
         retriever = self._build_retriever()
         docs = retriever.invoke(question)
-
+    
+        history = self._get_session_history(session_id)
+    
         context = self._format_docs_for_context(docs)
-
+    
         prompt_template = ChatPromptTemplate.from_messages([
-            ("system", """You are an AI researcher. Use the provided context to answer the question.
-            Only use the information in the context to answer the question. If the context does not contain enough information, say "I don't know." Do not make up answers.
-            Cite the sources of your information in your answer.
-            Rate your confidence: high, medium, or low."""),
-            ("human", "Context:\n{context}\n\nQuestion: {question} provide a detailed answer with sources citations."),
+            (
+                "system",
+                """You are an AI researcher. Use the provided context to answer the question.
+    
+    Only use the information in the context and history to answer the question.
+    If the answer cannot be found in either the history or context, say "I don't know."
+    Do not make up information.
+    
+    Cite the sources of your information in your answer.
+    Rate your confidence: high, medium, or low."""
+            ),
+    
+            MessagesPlaceholder(variable_name="history"),
+    
+            (
+                "human",
+                "Context:\n{context}\n\n"
+                "Question: {question}\n"
+                "Provide a detailed answer with source citations."
+            ),
         ])
-
+    
         chain = prompt_template | self.llm | StrOutputParser()
-
-        response = chain.invoke({"context": context, "question": question})
-
+    
+        response = chain.invoke({
+            "context": context,
+            "question": question,
+            "history": history.messages[-10:]
+        })
+    
+        history.add_message(
+            HumanMessage(content=question)
+        )
+    
+        history.add_message(
+            AIMessage(content=response)
+        )
+    
         return response
+
+    def clear_session(self,session_id: str):
+        """
+        Clear the chat history for a given session.
+        """
+        if session_id in self.session_store:
+            del self.session_store[session_id]
+            print(f"Session {session_id} cleared.")
+        else:
+            print(f"Session {session_id} does not exist.")
+
+    def get_session_history(self, session_id: str) -> List:
+        """
+        Get the chat history for a given session as a list of messages.
+        """
+        if session_id in self.session_store:
+            return [
+                {"role": "human", "content": msg.content} if isinstance(msg, HumanMessage) else
+                {"role": "ai", "content": msg.content}
+                for msg in self.session_store[session_id].messages
+            ]
+        return []
+
+
 
 if __name__ == "__main__":
 
@@ -177,6 +238,14 @@ if __name__ == "__main__":
 
 
     researcher = AIResearcher()
+
+    history = researcher._get_session_history("session_1")
+    print(type(history))  # Should print <class 'langchain_core.chat_history.InMemoryChatMessageHistory'>
+    print(history.messages)  # Should print an empty list []
+
+    history.add_message(HumanMessage(content="Hello, I am testing the chat history."))
+    history.add_message(AIMessage(content="Hello! How can I assist you with your research today?"))
+    print(history.messages)  # Should print the two messages added above
 
     researcher.add_text("Neural networks are a type of machine learning algorithm inspired by the structure and function of the human brain.", source="Test Source 1")
 
@@ -197,25 +266,39 @@ if __name__ == "__main__":
     #     print(f"Source: {doc.metadata.get('source')}")
     #     print(f"Content: {doc.page_content[:200]}...")  # Print first 200 characters
 
-    q1 = "What is a neural network and how does it work?"
-    q2 = "Explain the Transformer architecture and its significance in NLP."
-    q3 = "Can you expand the answer to the second question with more details and examples?"
+    q1 = "What is NLP? Answer in one line."
+    q2 = "What is Reinforcement Learning? Answer in one line."
+    q3 = "What question was asked in the previous question?"
 
     print("\n--- Research Questions and Answers ---")
 
     print(f"\nQuestion: {q1}")
-    answer1 = researcher.ask(q1)
+    answer1 = researcher.ask(q1,"test")
     print(f"Answer: {answer1}")
 
-    print(f"\nQuestion: {q2}")
-    answer2 = researcher.ask(q2)
+    print(f"\nQuestion: {q3}")
+    answer2 = researcher.ask(q3,"test")
     print(f"Answer: {answer2}")
 
-    print(f"\nQuestion: {q3}")
-    answer3 = researcher.ask(q3)
+    print(f"\nQuestion: {q2}")
+    answer3 = researcher.ask(q2,"demo")
     print(f"Answer: {answer3}")
 
+    print(f"\nQuestion: {q3}")
+    answer4 = researcher.ask(q3,"demo")
+    print(f"Answer: {answer4}")
+
     print("\n--- End of Research Questions and Answers ---")
+
+    print("\n--- Session History ---")
+    for i,msg in enumerate(researcher.get_session_history(session_id="demo")):
+        print(f"Message {i+1}: Role: {msg['role']}, Content: {msg['content'][:100]}.....")
+
+    for i,msg in enumerate(researcher.get_session_history(session_id="test")):
+            print(f"Message {i+1}: Role: {msg['role']}, Content: {msg['content'][:100]}....")
+
+    print("\n--- End of Session History ---")
+
 
     import os
 
