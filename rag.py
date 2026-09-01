@@ -39,7 +39,7 @@ load_dotenv()
 
 class ResearchResponse(BaseModel):
     answer: str = Field( description="The answer to the research question.")
-    confidence: float = Field( description="The confidence level of the answer.")
+    confidence: str = Field( description="The confidence level of the answer.")
     sources: List[str] = Field( description="The sources used to generate the answer.") 
     key_quotes: List[str] = Field( description="Key quotes from the sources that support the answer.",default = [])
 
@@ -250,27 +250,29 @@ class AIResearcher:
         sources = list(set(doc.metadata.get("source", "Unknown Source") for doc in docs))
 
         prompt_template = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                """You are an AI researcher. Use the provided context to answer the question.
-    
-                Only use the information in the context and history to answer the question.
-                If the answer cannot be found in either the history or context, say "I don't know."
-                Do not make up information.
+    (
+        "system",
+        """You are an AI researcher answering questions using a provided knowledge base.
 
-                Cite the sources of your information in your answer.
-                Rate your confidence: high, medium, or low."""
-            ),
-    
-            MessagesPlaceholder(variable_name="history"),
-    
-            (
-                "human",
-                "Context:\n{context}\n\n"
-                "Question: {question}\n"
-                "Provide a detailed answer with source citations."
-            ),
-        ])
+        Rules:
+        1. Use ONLY information explicitly present in the provided context or conversation history.
+        2. Do NOT use your own outside knowledge.
+        3. If the answer cannot be supported by the context or history, say exactly:
+           "I don't know."
+        4. Do not infer, assume, or invent facts.
+        5. Cite the source of each factual claim when a source is available.
+        6. Rate confidence as high, medium, or low based on how strongly the provided
+           context/history supports the answer.
+        """
+    ),
+    MessagesPlaceholder(variable_name="history"),
+    (
+        "human",
+        "Context:\n{context}\n\n"
+        "Question: {question}\n\n"
+        "Provide a detailed answer with source citations and a confidence rating."
+    ),
+])
 
         chain = prompt_template | structured_llm
 
@@ -308,7 +310,7 @@ class AIResearcher:
             ]
         return []
 
-    def print_research_response(question: str, response: ResearchResponse):
+    def print_research_response(self,question: str, response: ResearchResponse):
         """
         Print the structured research response in a readable format.
         """
